@@ -20,4 +20,3 @@ async def get_xmr_stats():
     except Exception as e:
         print(f"Erreur : {str(e)}")
         return None
-#hello
