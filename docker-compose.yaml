@@ -87,6 +87,8 @@ x-airflow-common:
 
 services:
   postgres:
+    ports:
+      - "5432:5432"
     image: postgres:13
     environment:
       POSTGRES_USER: airflow
