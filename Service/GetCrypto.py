@@ -16,3 +16,4 @@ async def get_xmr_eur_price():
         if 'exchange' in locals():
             await exchange.close()
         return None
+
