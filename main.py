@@ -1,5 +1,5 @@
-from Service.GetCrypto import get_xmr_eur_price
-from Service.GetNews import get_xmr_stats
+from service.GetCrypto import get_xmr_eur_price
+from service.GetNews import get_xmr_stats
 from asyncio import run
 
 async def main():

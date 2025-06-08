@@ -49,8 +49,8 @@ x-airflow-common:
   # In order to add custom dependencies or upgrade provider distributions you can use your extended image.
   # Comment the image line, place your Dockerfile in the directory where you placed the docker-compose.yaml
   # and uncomment the "build" line below, Then run `docker-compose build` to build the images.
-  image: ${AIRFLOW_IMAGE_NAME:-apache/airflow:3.0.1}
-  # build: .
+  #image: ${AIRFLOW_IMAGE_NAME:-apache/airflow:3.0.1}
+  build: .
   environment:
     &airflow-common-env
     AIRFLOW__CORE__EXECUTOR: CeleryExecutor
@@ -60,12 +60,8 @@ x-airflow-common:
     AIRFLOW__CELERY__BROKER_URL: redis://:@redis:6379/0
     AIRFLOW__CORE__FERNET_KEY: ''
     AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'true'
-    AIRFLOW__CORE__LOAD_EXAMPLES: 'true'
+    AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
     AIRFLOW__CORE__EXECUTION_API_SERVER_URL: 'http://airflow-apiserver:8080/execution/'
-    #SPARK dependancies
-    SPARK_HOME: /opt/spark
-    PYTHONPATH: /opt/spark/python:/opt/spark/python/lib/py4j-0.10.9.5-src.zip
-    _PIP_ADDITIONAL_REQUIREMENTS: ${_PIP_ADDITIONAL_REQUIREMENTS:-apache-airflow-providers-apache-spark pyspark}
     #
     # yamllint disable rule:line-length
     # Use simple http server on scheduler for health checks
@@ -74,7 +70,6 @@ x-airflow-common:
     AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK: 'true'
     # WARNING: Use _PIP_ADDITIONAL_REQUIREMENTS option ONLY for a quick checks
     # for other purpose (development, test and especially production usage) build/extend Airflow image.
-    _PIP_ADDITIONAL_REQUIREMENTS: ${_PIP_ADDITIONAL_REQUIREMENTS:-}
     # The following line can be used to set a custom config file, stored in the local config folder
     AIRFLOW_CONFIG: '/opt/airflow/config/airflow.cfg'
   volumes:
@@ -83,6 +78,7 @@ x-airflow-common:
     - ${AIRFLOW_PROJ_DIR:-.}/config:/opt/airflow/config
     - ${AIRFLOW_PROJ_DIR:-.}/plugins:/opt/airflow/plugins
     - ${AIRFLOW_PROJ_DIR:-.}/data:/opt/airflow/data
+    - ${AIRFLOW_PROJ_DIR:-.}/service:/opt/airflow/service
   user: "${AIRFLOW_UID:-50000}:${AIRFLOW_GID:-0}"
   depends_on:
     &airflow-common-depends-on
@@ -92,35 +88,6 @@ x-airflow-common:
       condition: service_healthy
 
 services:
-  spark:
-      image: bitnami/spark:latest
-      environment:
-        - SPARK_MODE=master
-        - SPARK_RPC_AUTHENTICATION_ENABLED=no
-        - SPARK_RPC_ENCRYPTION_ENABLED=no
-        - SPARK_LOCAL_STORAGE_ENCRYPTION_ENABLED=no
-        - SPARK_SSL_ENABLED=no
-      ports:
-        - "8090:8080"
-        - "7077:7077"
-      healthcheck:
-        test: ["CMD", "curl", "-f", "http://localhost:8080"]
-        interval: 30s
-        timeout: 10s
-        retries: 5
-      spark-worker:
-        image: bitnami/spark:latest
-        environment:
-          - SPARK_MODE=worker
-          - SPARK_MASTER_URL=spark://spark:7077
-          - SPARK_WORKER_MEMORY=1G
-          - SPARK_WORKER_CORES=1
-          - SPARK_RPC_AUTHENTICATION_ENABLED=no
-          - SPARK_RPC_ENCRYPTION_ENABLED=no
-          - SPARK_LOCAL_STORAGE_ENCRYPTION_ENABLED=no
-          - SPARK_SSL_ENABLED=no
-        depends_on:
-          - spark
   postgres:
     ports:
       - "5432:5432"
