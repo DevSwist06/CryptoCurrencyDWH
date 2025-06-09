@@ -1,7 +1,10 @@
 from airflow import DAG
 from airflow.operators.python import PythonOperator
-from datetime import datetime
+from datetime import datetime, timezone
 from pyspark.sql import SparkSession
+import requests
+import os
+import json
 
 default_args = {
     'owner': 'airflow',
@@ -9,25 +12,45 @@ default_args = {
 }
 
 def run_pyspark_job():
-    spark = SparkSession.builder.master("local[*]").appName("spark_job_get_crypto").getOrCreate()
-    # Importer et exécuter ton script PySpark ici, ou mettre le code directement
-    # Exemple minimal : lire ton script et exécuter les fonctions dedans
+    spark = SparkSession.builder \
+        .master("local[*]") \
+        .appName("spark_job_get_crypto") \
+        .getOrCreate()
 
-    # Si tu veux exécuter ton script Python externe, tu peux l'importer ou l'exécuter via exec()
-    # Exemple très simple d'exécution inline :
-    import sys
-    sys.path.insert(0, '/opt/airflow/dags/service/')
-    import GetCryptoJSON  # supposant que c’est un module Python (pas un script standalone)
+    url = "https://api.coingecko.com/api/v3/simple/price"
+    params = {"ids": "monero", "vs_currencies": "usd"}
 
-    # Appelle une fonction principale dans GetCryptoJSON si elle existe
-    if hasattr(GetCryptoJSON, 'main'):
-        GetCryptoJSON.main(spark)
-    else:
-        print("Le module GetCryptoJSON n'a pas de fonction main(spark) à appeler.")
+    try:
+        response = requests.get(url, params=params)
+        response.raise_for_status()
+        data = response.json()
 
-    spark.stop()
+        now_utc = datetime.now(timezone.utc)
+        data['timestamp_utc'] = now_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
 
-with DAG('spark_job_get_crypto', default_args=default_args, schedule='@daily') as dag:
+        # Convertir en DataFrame Spark
+        df = spark.read.json(spark.sparkContext.parallelize([json.dumps(data)]))
+
+        output_dir = "/opt/airflow/data/crypto_raw/"
+        os.makedirs(output_dir, exist_ok=True)
+
+        output_path = os.path.join(output_dir, f"monero_price_{now_utc.strftime('%Y%m%dT%H%M%S')}")
+        df.coalesce(1).write.mode("overwrite").json(output_path)
+
+        print(f"✅ Fichier Spark JSON écrit dans : {output_path}")
+
+    except requests.RequestException as e:
+        print(f"❌ Erreur lors de l’appel API : {e}")
+
+    finally:
+        spark.stop()
+
+with DAG(
+    dag_id='spark_job_get_crypto',
+    default_args=default_args,
+    schedule='@daily',  # ou 'None' si exécution manuelle
+    catchup=False
+) as dag:
     run_spark_local = PythonOperator(
         task_id='run_spark_local',
         python_callable=run_pyspark_job
