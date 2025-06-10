@@ -11,7 +11,8 @@ from dotenv import load_dotenv
 load_dotenv(dotenv_path="/opt/airflow/.env")
 YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY")
 KEYWORD = "monero"
-BASE_PATH = "/opt/airflow/data/trends"
+BASE_PATH = "/opt/airflow/data/trends_raw"
+OUTPUT_PATH = Path("/opt/airflow/data/formatted/bdd_trend.json")
 
 # === UTILS ===
 def save_json(data, filepath):
@@ -20,18 +21,20 @@ def save_json(data, filepath):
         json.dump(data, f, indent=2)
 
 def read_json(filepath):
-    with open(filepath, "r") as f:
-        return json.load(f)
+    if filepath.exists():
+        try:
+            with open(filepath, "r") as f:
+                return json.load(f)
+        except json.JSONDecodeError:
+            return []
+    return []
 
-# === FETCH YOUTUBE TRENDS ===
+# === TÂCHE 1 : FETCH YOUTUBE ===
 def fetch_youtube_trends(**kwargs):
     service = build("youtube", "v3", developerKey=YOUTUBE_API_KEY)
-
     now = datetime.now(timezone.utc)
-    time_24_hours_ago = now - timedelta(days=1)
-    since = time_24_hours_ago.isoformat(timespec='milliseconds').replace('+00:00', 'Z')
+    since = (now - timedelta(days=1)).isoformat(timespec='seconds').replace('+00:00', 'Z')
 
-    # Étape 1: recherche des vidéos
     search_response = service.search().list(
         q=KEYWORD,
         part="id",
@@ -43,82 +46,76 @@ def fetch_youtube_trends(**kwargs):
 
     video_ids = [item['id']['videoId'] for item in search_response.get("items", [])]
 
-    # Étape 2: récupération des stats détaillées
     detailed_data = []
-    for i in range(0, len(video_ids), 50):  # gestion par batch de 50
+    for i in range(0, len(video_ids), 50):
         chunk = video_ids[i:i+50]
         stats_response = service.videos().list(
-            part="snippet,statistics,contentDetails",
+            part="snippet,statistics",
             id=",".join(chunk)
         ).execute()
         detailed_data.extend(stats_response.get("items", []))
 
-    output_path = Path(BASE_PATH) / "youtube" / f"{KEYWORD}_youtube_{now.strftime('%Y%m%dT%H%M%S')}.json"
-    save_json(detailed_data, output_path)
-    kwargs['ti'].xcom_push(key='youtube_path', value=str(output_path))
+    # Sauvegarde fichier brut, optionnel ici
+    raw_path = Path(BASE_PATH) / "youtube" / f"{KEYWORD}_{now.strftime('%Y%m%dT%H%M%S')}.json"
+    save_json(detailed_data, raw_path)
 
-# === AGGREGATION SIMPLE ===
-def aggregate_trends(**kwargs):
+    # Passe le chemin pour la prochaine tâche
+    kwargs['ti'].xcom_push(key='raw_path', value=str(raw_path))
+
+# === TÂCHE 2 : FORMATTER ET AJOUTER AU JSON HISTORIQUE ===
+def process_youtube_trends(**kwargs):
     ti = kwargs['ti']
-    youtube_path = Path(ti.xcom_pull(task_ids="fetch_youtube_trends", key="youtube_path"))
+    raw_path_str = ti.xcom_pull(task_ids='fetch_youtube_trends', key='raw_path')
+    raw_path = Path(raw_path_str)
 
-    yt_data = read_json(youtube_path)
+    data = read_json(raw_path)
+    if not data:
+        return
+
+    total_views = 0
+    total_likes = 0
+    total_comments = 0
+    video_count = len(data)
+
+    for video in data:
+        stats = video.get("statistics", {})
+        total_views += int(stats.get("viewCount", 0))
+        total_likes += int(stats.get("likeCount", 0))
+        total_comments += int(stats.get("commentCount", 0))
 
     summary = {
-        "timestamp": datetime.now().isoformat(),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
         "keyword": KEYWORD,
-        "video_count": len(yt_data),
-        "total_views": sum(int(video["statistics"].get("viewCount", 0)) for video in yt_data),
-        "total_likes": sum(int(video["statistics"].get("likeCount", 0)) for video in yt_data if "likeCount" in video["statistics"]),
-        "video_samples": [
-            {
-                "title": video["snippet"]["title"],
-                "channel": video["snippet"]["channelTitle"],
-                "views": video["statistics"].get("viewCount"),
-                "likes": video["statistics"].get("likeCount"),
-                "comments": video["statistics"].get("commentCount"),
-                "publishedAt": video["snippet"]["publishedAt"],
-                "url": f"https://www.youtube.com/watch?v={video['id']}"
-            }
-            for video in yt_data[:5]  # échantillon des 5 premiers
-        ]
+        "video_count": video_count,
+        "total_views": total_views,
+        "total_likes": total_likes,
+        "total_comments": total_comments
     }
 
-    bdd_path = Path("/opt/airflow/data/formatted/bdd_trend.json")
-    bdd_path.parent.mkdir(parents=True, exist_ok=True)
+    history = read_json(OUTPUT_PATH)
+    if not isinstance(history, list):
+        history = []
 
-    if bdd_path.exists():
-        try:
-            with open(bdd_path, "r") as f:
-                bdd_data = json.load(f)
-                if not isinstance(bdd_data, list):
-                    bdd_data = [bdd_data]
-        except json.JSONDecodeError:
-            bdd_data = []
-    else:
-        bdd_data = []
-
-    bdd_data.append(summary)
-
-    with open(bdd_path, "w") as f:
-        json.dump(bdd_data, f, indent=2)
+    history.append(summary)
+    save_json(history, OUTPUT_PATH)
 
 # === DAG ===
 with DAG(
-    dag_id="GetYoutubeTrends",
+    dag_id="GetYoutubeTrendsSimple",
     start_date=datetime(2024, 1, 1),
     schedule="@daily",
-    catchup=False
+    catchup=False,
+    tags=["youtube", "trends"]
 ) as dag:
 
-    youtube_task = PythonOperator(
+    fetch_task = PythonOperator(
         task_id="fetch_youtube_trends",
         python_callable=fetch_youtube_trends
     )
 
-    aggregate_task = PythonOperator(
-        task_id="aggregate_trends",
-        python_callable=aggregate_trends
+    process_task = PythonOperator(
+        task_id="process_youtube_trends",
+        python_callable=process_youtube_trends
     )
 
-    youtube_task >> aggregate_task
+    fetch_task >> process_task
