@@ -46,9 +46,9 @@ def run_pyspark_job():
         spark.stop()
 
 with DAG(
-    dag_id='spark_job_get_crypto',
+    dag_id='GetCrypto',
     default_args=default_args,
-    schedule='@daily',  # ou 'None' si exécution manuelle
+    schedule='@hourly',
     catchup=False
 ) as dag:
     run_spark_local = PythonOperator(

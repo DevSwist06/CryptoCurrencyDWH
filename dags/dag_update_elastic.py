@@ -6,7 +6,7 @@ import requests
 import os
 
 def load_json_to_elasticsearch():
-    file_path = "/opt/airflow/data/formatted/bdd_crypto_test.json"
+    file_path = "/opt/airflow/data/formatted/bdd_crypto.json"
     es_url = "http://elasticsearch:9200/crypto_prices/_bulk"
 
     bulk_data = ""
@@ -47,11 +47,10 @@ def load_json_to_elasticsearch():
 
 
 with DAG(
-    dag_id="inject_crypto_data_to_es",
+    dag_id="CryptoJSON_to_ElasticSearch",
     start_date=datetime(2025, 6, 1),
     schedule="@daily",
-    catchup=False,
-    tags=["elasticsearch", "crypto"],
+    catchup=False
 ) as dag:
 
     inject_task = PythonOperator(
